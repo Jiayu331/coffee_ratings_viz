@@ -1,0 +1,261 @@
+---
+title: "coffee_ratings"
+author: "Jiayu"
+date: "2025-03-18"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+summary(cars)
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+```{r}
+library(tidyverse)
+library(tidylog)
+library(janitor)
+library(lubridate)
+library(gtsummary)
+
+library(ggthemes)
+library(cowplot)
+library(paletteer)
+library(scales)
+library(patchwork)
+library(ggtext)
+library(geofacet)
+library(fmsb)
+
+library(glue)
+library(stringr)
+library(showtext)
+
+library(tidytuesdayR)
+```
+```{r}
+library(ggradar)
+```
+```{r}
+coffee_ratings <- readr::read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/main/data/2020/2020-07-07/coffee_ratings.csv')
+```
+```{r}
+clean_data <- coffee_ratings |>
+  select(total_cup_points, species, country_of_origin, harvest_year, aroma, flavor, aftertaste, acidity, body, balance, cupper_points) |>
+  mutate(across(everything(), ~ifelse(.==0, NA, .))) |>
+  na.omit() |>
+  clean_names()
+
+glimpse(clean_data)
+```
+```{r}
+n_robusta <- clean_data |>
+  filter(species=="Robusta") |>
+  count()
+
+n_arabica <- clean_data |>
+  filter(species=="Arabica") |>
+  count()
+
+harvest_year <- unique(clean_data$harvest_year) |>
+  sort()
+year_string <- paste(harvest_year, collapse = ",")
+
+cat(paste("The dataset compares the coffee beans harvested between year ", year_string, "."), paste("There are in total ", n_arabica, "types of Arabica beans and ", n_robusta, " Robusta beans tested."), sep = "\n")
+```
+```{r}
+data_countries <- clean_data |>
+  group_by(country_of_origin) |>
+  summarise(avg_cup_points = mean(total_cup_points),
+            aroma_mean = mean(aroma),
+            flavor_mean = mean(flavor),
+            aftertaste_mean = mean(aftertaste),
+            acidity_mean = mean(acidity),
+            body_mean = mean(body),
+            balance_mean = mean(balance),
+            cupper_mean = mean(cupper_points)) |>
+  mutate(avg_cup_points = round(avg_cup_points, 2)) |>
+  arrange(desc(avg_cup_points))
+
+data_countries
+```
+```{r}
+data_countries_scaled <- data_countries |>
+  mutate(across(aroma_mean:cupper_mean, rescale)) |>
+  rename(group = country_of_origin)
+data_countries_scaled
+```
+#ggradar plot for bean ratings in different countries
+```{r}
+plot_radar <-
+  function(data) {
+    country_name <- data$group[1]
+    total_points <- data$avg_cup_points[1]
+    
+    ggradar(data,
+            axis.label.size = 2,
+            grid.label.size = 2,
+            group.line.width = 1,
+            group.point.size = 1.5,
+            legend.position = "none",
+            values.radar = c(0,0.5,1)) +
+      labs(title = paste0(country_name),
+           subtitle = paste0("\nTotal Cup Points: ", total_points)) +
+      theme(plot.title = element_text(hjust = 0.5, size = 8, face = "bold"),
+            plot.subtitle = element_text(size = 6))
+  }
+
+plots_1 <- data_countries_scaled |>
+  group_split(group) |>
+  lapply(plot_radar)
+
+wrap_plots(plots_1, ncol = 6)
+```
+#ggradar plot for attributes scores for different species
+```{r}
+data_species <- clean_data |>
+  select(species, total_cup_points, aroma, flavor, aftertaste, acidity, body, balance, cupper_points) |>
+  group_by(species) |>
+  summarize(avg_cup_points = mean(total_cup_points),
+            aroma = mean(aroma),
+            flavor = mean(flavor),
+            aftertaste = mean(aftertaste),
+            acidity = mean(acidity),
+            body = mean(body),
+            balance = mean(balance),
+            cupper = mean(cupper_points)) |>
+  mutate(avg_cup_points = round(avg_cup_points, 2)) |>
+  arrange(desc(avg_cup_points))
+  
+data_species_scaled <- data_species |>
+  rename(group = species) |>
+  mutate(across(aroma:cupper, ~round(.x, 2))) |>
+  select(-avg_cup_points)
+
+data_species_scaled
+```
+#two species wrap radar plot
+```{r}
+data_species_scaled <- data_species_scaled |>
+  pivot_longer(cols = -group, names_to = "attribute", values_to = "score")
+
+data_species_scaled$attribute <- factor(data_species_scaled$attribute,
+                                        levels = c("aroma", "flavor", "aftertaste", "acidity", "body", "balance", "cupper"))
+```
+```{r}
+species_colors <- c("Arabica" = "#6F4E37", "Robusta" = "#C9A66B")
+
+species_radar <- function(data) {
+  species_name <- unique(data$group)
+  cup_points <- unique(data_species %>% filter(data_species$species == species_name) %>% pull(avg_cup_points))
+  
+  ggradar(data,
+          axis.label.size = 6,
+          grid.label.size = 6,
+          group.line.width = 1.5,
+          group.point.size = 2,
+          values.radar = c(7,7.5,8),
+          group.colours = species_colors) +
+    labs(title = species_name[1],
+          subtitle = paste("Total Cup Points:", cup_points[1])) +
+    theme(
+      plot.title = element_text(size = 16, face = "bold"),
+      plot.subtitle = element_text(size = 12, margin = margin(t=5))
+    )
+}
+
+plot_species <- data_species_scaled |>
+  group_split(group) |>
+  lapply(species_radar)
+
+wrap_plots(plot_species)
+
+```
+#two species one radar plot
+```{r}
+two_species <- data_species_scaled |>
+  ggplot(aes(x = attribute, y = score, group = group, color = group, fill = group)) +
+  geom_line(aes(group = group), size = 1) +
+  geom_point(size = 3) +
+  coord_polar() +
+  scale_y_continuous(limits = c(7,8)) +
+  theme_minimal() +
+  theme(axis.text.y = element_text(size = 8),
+        axis.title = element_blank(),
+        legend.position = "bottom") +
+  labs(title = "Arabica and Robusta Comparison")
+  
+
+print(two_species)
+```
+#two species compare with fmsb library
+```{r}
+install.packages("fmsb")
+```
+
+```{r}
+data_species_scaled <- data_species_scaled |>
+  column_to_rownames(var = "group")
+```
+```{r}
+data_species_scaled <-
+  rbind(rep(8,7), rep(7,7), data_species_scaled)
+```
+```{r}
+font_add_google("Roboto Slab", "roboto_slab")
+showtext_auto()
+```
+```{r}
+svglite("compare bean species.svg", width = 8, height = 6)
+
+par(family = "roboto")
+
+#long_subtitle <- "This is an overview of the Arabica and Robusta coffee beans reviewed by Coffee Quality Institute in Janurary 2018. The two species of beans originated from 35 countries and were harvested between 2009 and 2016."
+#wrapped_subtitle <- paste(strwrap(long_subtitle, width = 45), collapse = "\n")
+
+#par(xpd = TRUE, oma = c(0, 0, 3, 0), mar = c(4,6,8,2) + 0.1)
+
+fmsb_twospecies <- radarchart(data_species_scaled,
+                              axistype = 1,
+                              pcol = c("#6F4E37","#C9A66B"),
+                              pfcol = c("#6F4E3750","#C9A66B50"),
+                              cglcol = "grey", cglty = 1, axislabcol = "grey", caxislabels = c(7,7.25,7.5,7.75,8), 
+                              cglwd = 0.8,
+                              vlcex = 1)
+
+#title ("Compare Arabica and Robusta Beans", adj = 0, cex.main = 2, family = "roboto_slab", font = 2) 
+
+  legend(x=1.5, y=1, legend = rownames(data_species_scaled[-c(1,2),]), col = c("#6F4E37","#C9A66B"), pch = c(19, 19), bty = "n", text.col = "#000000", cex = 1, y.intersp = 1.5)
+  
+#text(x = -2.5, y = 1.1, labels = wrapped_subtitle, adj = 0, cex = 1.2, family = "roboto_slab")
+
+dev.off()
+```
+
+
+
+
+
+
+
+
+
+
+
